@@ -225,6 +225,35 @@ def build_run_dir() -> str:
     return run_dir
 
 
+def _history_usage(parent: str) -> tuple[int, int]:
+    """Return (run_dir_count, total_bytes) under the run_dir parent.
+    Cheap best-effort walk; does not follow symlinks."""
+    count = 0
+    total = 0
+    if not os.path.isdir(parent):
+        return 0, 0
+    try:
+        entries = os.listdir(parent)
+    except OSError:
+        return 0, 0
+    for name in entries:
+        sub = os.path.join(parent, name)
+        if not os.path.isdir(sub):
+            continue
+        count += 1
+        for root, _, files in os.walk(sub):
+            for fn in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, fn))
+                except OSError:
+                    pass
+    return count, total
+
+
+def _fmt_mb(n: int) -> str:
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
 def check_p4_tempdir() -> CheckResult:
     r = CheckResult(id="P-4", name="Writable per-run tempdir (no hard-coded paths)")
     try:
@@ -246,13 +275,34 @@ def check_p4_tempdir() -> CheckResult:
         r.fix = "Check disk space / permissions on the temp volume."
         return r
 
-    r.status = "PASS"
-    r.detail = f"run_dir={run_dir}"
+    # History check: accumulated run_dirs are NOT auto-deleted. Report
+    # them so the user can prune with cleanup.py when disk grows.
+    # Exclude the just-created run_dir from the count/bytes.
+    parent = os.path.dirname(run_dir)
+    count, total_bytes = _history_usage(parent)
+    if count > 0:
+        count -= 1  # drop the one we just made
+    history_hint = (f"; history: {count} previous run(s), "
+                    f"{_fmt_mb(total_bytes)} total")
+
     r.data = {
         "base": tempfile.gettempdir(),
-        "parent": os.path.dirname(run_dir),
+        "parent": parent,
         "run_dir": run_dir,
+        "history_runs": count,
+        "history_bytes": total_bytes,
     }
+
+    # Degrade to WARN when storage grows. Advisory only — never auto-clean.
+    if total_bytes > 500 * 1024 * 1024 or count > 50:
+        r.status = "WARN"
+        r.detail = f"run_dir={run_dir}{history_hint}"
+        r.fix = ("Run `python reference/cleanup.py --list` to review, then "
+                 "`python reference/cleanup.py --older-than 30` (or "
+                 "`--keep-last 10`) to prune. Cleanup is never automatic.")
+    else:
+        r.status = "PASS"
+        r.detail = f"run_dir={run_dir}{history_hint}"
     return r
 
 
@@ -382,12 +432,8 @@ def run_all(window_title: str | None = None,
     ]
 
 
-def record_screenshot(run_dir: str, path: str, step: str, phase: str) -> None:
-    """Append a screenshot entry to manifest.json inside run_dir.
-
-    Called from SKILL.md Step 1 / Step 5. Phase is "before" or "after".
-    Seeds a bare manifest if none exists so screenshots don't orphan.
-    """
+def _ensure_manifest(run_dir: str) -> str:
+    """Return path to manifest.json, seeding a bare one if missing."""
     os.makedirs(run_dir, exist_ok=True)
     mp = os.path.join(run_dir, "manifest.json")
     if not os.path.isfile(mp):
@@ -398,22 +444,59 @@ def record_screenshot(run_dir: str, path: str, step: str, phase: str) -> None:
                      "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                      "checks": [],
                      "screenshots": [],
+                     "actions": [],
+                     "evaluations": [],
+                     "workarounds": [],
                      "note": "bare manifest; preflight was not run in this run_dir"},
                     f, ensure_ascii=False, indent=2,
                 )
         except OSError:
-            return
+            pass
+    return mp
+
+
+def record_event(run_dir: str, kind: str, data: dict) -> None:
+    """Append an event entry to manifest.json.
+
+    `kind` ∈ {"screenshot", "action", "evaluation", "workaround"}.
+    Each kind appends to its corresponding plural array. Unknown kinds go
+    to an `other` array so nothing is silently dropped.
+
+    Callers should pass domain fields in `data` — e.g.:
+        record_event(rd, "action", {"kind": "click", "x": 1820, "y": 940})
+        record_event(rd, "evaluation", {"step": "page-1", "result": "pass",
+                                        "expected": "...", "observed": "..."})
+        record_event(rd, "workaround", {"tactic": "Ctrl+-", "reason": "scroll was inert"})
+
+    Timestamp is added automatically. Returns silently on IO errors; this
+    is a logging convenience, not a correctness primitive.
+    """
+    mp = _ensure_manifest(run_dir)
+    entry = {**data, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    array_key = {
+        "screenshot": "screenshots",
+        "action": "actions",
+        "evaluation": "evaluations",
+        "workaround": "workarounds",
+    }.get(kind, "other")
     try:
         with open(mp, "r+", encoding="utf-8") as f:
             m = json.load(f)
-            m.setdefault("screenshots", []).append(
-                {"path": path, "step": step, "phase": phase,
-                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
-            )
+            m.setdefault(array_key, []).append(entry)
             f.seek(0); f.truncate()
             json.dump(m, f, ensure_ascii=False, indent=2)
     except (OSError, json.JSONDecodeError):
         pass
+
+
+def record_screenshot(run_dir: str, path: str, step: str, phase: str) -> None:
+    """Append a screenshot entry to manifest.json (kept for back-compat).
+
+    New callers should prefer `record_event(run_dir, "screenshot", {...})`
+    directly; this wrapper will continue to work indefinitely.
+    """
+    record_event(run_dir, "screenshot",
+                 {"path": path, "step": step, "phase": phase})
 
 
 def _write_manifest(results: list[CheckResult]) -> str | None:
@@ -426,6 +509,9 @@ def _write_manifest(results: list[CheckResult]) -> str | None:
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "checks": [asdict(r) for r in results],
         "screenshots": [],
+        "actions": [],
+        "evaluations": [],
+        "workarounds": [],
     }
     try:
         with open(manifest_path, "w", encoding="utf-8") as f:

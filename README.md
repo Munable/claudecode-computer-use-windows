@@ -76,10 +76,12 @@ python reference/preflight.py --window-title "Notepad"
   browser (no desktop window), use Playwright/Cypress/Selenium instead.
   This skill exists precisely because WebView2/Electron/native apps
   behave differently than Chromium does for those tools.
-- **No auto-install, no auto-launch.** Preflight prints the `pip install`
-  command for missing packages but the user decides whether to run it.
-  The skill never launches the target application; it only verifies a
-  window that is already running.
+- **No auto-install.** Preflight prints the `pip install` command for
+  missing packages but the user decides whether to run it.
+- **Launch is only on explicit request.** The skill will never silently
+  start an app the user didn't name, but when the user says "open X" or
+  "check Y at https://..." it can invoke the system's default handler
+  (`start URL`, `start <app>`) as part of serving that request.
 
 ## How this relates to Anthropic's official computer use
 
@@ -102,16 +104,43 @@ one sentence meaningfully reduces silent mis-validations.
 
 ```
 claudecode-computer-use-windows/
-├── SKILL.md              # What Claude Code reads to activate the skill
-├── README.md             # This file
-├── LICENSE               # MIT
+├── SKILL.md                # What Claude Code reads to activate the skill
+├── README.md               # This file
+├── LICENSE                 # MIT
 ├── .gitignore
 └── reference/
-    ├── preflight.py      # 7-check environment scan (P-1 .. P-7)
-    ├── scan_windows.py   # Lists every visible top-level window
-    ├── dpi.py            # Per-Monitor V2 DPI awareness helper
-    └── click-fallbacks.md  # Five-rung click-recovery ladder
+    ├── preflight.py        # 7-check environment scan + manifest helpers
+    ├── scan_windows.py     # Lists every visible top-level window
+    ├── dpi.py              # Per-Monitor V2 DPI awareness helper
+    ├── cleanup.py          # Manual pruning of accumulated run_dir history
+    ├── click-fallbacks.md  # Click + scroll recovery ladders
+    └── troubleshooting.md  # Rare / product-specific gotchas (not loaded by default)
 ```
+
+## Keeping the run directory tidy
+
+Each invocation of the skill creates a new `run_dir` under
+`%TEMP%\ccuw-verify\<timestamp>\` containing screenshots, a `manifest.json`
+audit log, and any templates. These are never auto-deleted. After many
+runs they accumulate.
+
+```bash
+# See how much disk the history is using
+python reference/cleanup.py --list
+
+# Keep the newest 10, delete the rest
+python reference/cleanup.py --keep-last 10
+
+# Delete runs older than 30 days
+python reference/cleanup.py --older-than 30
+
+# Preview first without deleting
+python reference/cleanup.py --older-than 30 --dry-run
+```
+
+Preflight's P-4 also reports the current history size and will degrade
+to WARN (with a fix line pointing at `cleanup.py`) when the total exceeds
+500 MB or 50 runs. Actual deletion is always user-triggered.
 
 ## License
 

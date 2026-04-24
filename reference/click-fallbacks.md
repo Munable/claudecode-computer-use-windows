@@ -151,3 +151,41 @@ If all five rungs fail, **stop**. Collect:
 
 Return this bundle to the caller with status FAIL. Do NOT fabricate a
 "click succeeded" result from a guess.
+
+---
+
+## Scroll fallback (separate from the click ladder)
+
+Scrolling has its own failure modes. Two real ones seen in practice:
+
+1. **`pyautogui.scroll(±N)` silently does nothing** — Windows routes wheel
+   events to the window under the cursor, and the cursor may be on an
+   unresponsive surface (overlay, gutter, fixed header). Moving the mouse
+   into the scrollable content area before scrolling usually fixes it.
+2. **Keyboard scroll keys (End / PageDown / Home / Space) do nothing after
+   navigation** — after `start URL` or address-bar entry, DOM focus is in
+   the address bar, not the page. The keys reach the omnibox caret, not
+   the document. `SetForegroundWindow` does not fix this — it only affects
+   *which window* has focus, not *which element* inside the window.
+
+### Scroll recovery ladder
+
+- **Rung S1 — Mouse wheel on content.** Move cursor to the middle of the
+  scrollable region first, then `pyautogui.scroll(-N)`. Confirm via
+  before/after screenshot diff.
+- **Rung S2 — Transfer focus into the DOM, then keyboard.** Click a safe
+  empty area in the page body (avoid links/buttons), wait briefly, then
+  press `End` / `PageDown` / `Home`. Click is mandatory — `SetForeground`
+  alone is not enough.
+- **Rung S3 — Bypass the page mechanism.** Use a URL parameter
+  (`?page=2`, `&offset=N`) if the target supports pagination, or type
+  `javascript:window.scrollTo(0,document.body.scrollHeight)` in the
+  address bar. Record in the report that you used this.
+
+If all three fail, STOP and report with both screenshots and the document
+layout observed. Do NOT blindly loop.
+
+Note: zooming out (`Ctrl+-`) to fit more content on one screen is a valid
+workaround when scrolling itself is intractable, but **it is not a
+substitute for scrolling**. If you zoom out, report it under "workarounds
+used" in the final report.

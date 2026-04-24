@@ -182,6 +182,13 @@ method), or a page change to wait for.
 
 ## Step 4 — Act
 
+> **Focus gotcha**: after `start URL` or any external browser navigation, Chrome's
+> DOM focus is in the address bar, not the page. Any keyboard scroll (End /
+> PageDown / Home / Space) **must be preceded by a click in the page body** to
+> transfer focus into the DOM. `SetForegroundWindow` only brings the window to
+> the top — it does not choose which element inside the window is focused.
+> See `reference/click-fallbacks.md` § Scroll fallback.
+
 ### 4a. Click
 
 Prefer the split form (Rung 1 of `./reference/click-fallbacks.md`):
@@ -250,11 +257,11 @@ re-try. **State "I have evaluated step X — Pass" or "Fail" explicitly.**
 4. **Blind action sequences.** Two `pyautogui` calls with no screenshot +
    `Read` between them = violation.
 5. **`pyautogui.typewrite()` on non-ASCII input** (use clipboard, 4c).
-6. **Hard-coded absolute paths** of any kind: specific user home, fixed
-   tempdir literals, raw drive letters, specific resolution numbers, a
-   specific port literal. Derive everything from `tempfile`, env vars,
-   or preflight output. Canonical screenshot location is the `run_dir`
-   from preflight; the skill never writes outside `run_dir`.
+6. **Hard-coded absolute paths, or writing outside the P-6 whitelist.**
+   No literal user home, drive letter, tempdir path, resolution number,
+   or port literal — derive from `tempfile`, env vars, or preflight
+   output. All file writes must stay inside `run_dir` / `%APPDATA%` /
+   `~`. Screenshots, manifests, and templates live in `run_dir`.
 7. **Disabling `pyautogui.FAILSAFE`** or intentionally moving the cursor
    near `(0, 0)`.
 8. **Auto-installing packages** when P-2 fails. Report the missing
@@ -269,10 +276,6 @@ re-try. **State "I have evaluated step X — Pass" or "Fail" explicitly.**
 11. **Substituting a "close-enough" target** when the expected control
     is absent on the expected page. Report what IS there and stop; do
     not silently pick another field.
-12. **Writing any file outside `run_dir`**, `%APPDATA%`, or `~` (the P-6
-    whitelist). Screenshots, manifests, and templates all live under
-    `run_dir`. Anything else = violation.
-
 Violating any item aborts the verification with status FAIL.
 
 ---
@@ -291,6 +294,11 @@ Report back to the caller with:
   scale factor, window bbox, FAILSAFE state — so the caller can
   reproduce.
 - If any click-fallback rung beyond Rung 1 was used, which and why.
+- **All workarounds beyond the documented rungs.** If you used `Ctrl+-/+`
+  to zoom, a `javascript:` URL, a custom delay longer than standard, or
+  any other ad-hoc technique, list it and why it was needed. Silent
+  workarounds compound across invocations and make the skill harder to
+  improve.
 
 ---
 
@@ -303,27 +311,33 @@ Report back to the caller with:
   (PID, class, size, title) so the user can pick one.
 - `./reference/dpi.py` — `ensure_dpi_aware()` + `primary_scale_factor()`.
   Import this first in every helper script that touches screen or mouse.
-- `./reference/click-fallbacks.md` — 5-rung click-recovery ladder,
-  consulted only when a Rung-1 click produces no visible effect.
+- `./reference/click-fallbacks.md` — click + scroll recovery ladders,
+  consulted only when the standard Rung 1 produces no visible effect.
+- `./reference/troubleshooting.md` — rare / product-specific gotchas
+  accumulated across real use. Not loaded by default; consult only when
+  SKILL.md + click-fallbacks.md don't cover what you're seeing.
+- `./reference/cleanup.py` — manual tool for pruning accumulated
+  `run_dir` history when disk usage grows. Never invoked automatically.
+
+Installation and first-run instructions live in `README.md`.
 
 ---
 
-## Bringing this skill to a new machine
+## Scope discipline (rules for editing this skill)
 
-Self-contained: all paths resolve at runtime via `tempfile.gettempdir()`,
-`%APPDATA%`, `~` — no string references a specific user, drive, or
-application. Steps for a fresh Windows box:
+These govern how this skill evolves across repeated use. Respect them to
+keep SKILL.md from bloating into a graveyard of every historical gotcha.
 
-1. **Copy** the whole `claudecode-computer-use-windows/` directory into
-   `~/.claude/skills/` on the target machine (or `git clone` it there).
-2. **Install packages**: `pip install pyautogui pyperclip pywin32`
-   (optional: `mss opencv-python pynput`). P-2 will report what's missing.
-3. **Run preflight** — for a first dry run, even without a target:
-   `python reference/preflight.py`. P-3 will WARN and direct you to
-   `scan_windows.py`, and the rest of the environment will be checked.
-4. Once you have a target window, re-run with `--window-title "<substring>"`.
-5. Preflight prints an `export CCUW_RUN_DIR=...` line — run it once per
-   shell to reuse the canonical `run_dir` in Step 1 snippets.
-
-The skill never auto-installs packages, never auto-launches applications,
-and never writes outside `run_dir` / `%APPDATA%` / `~`.
+- **Don't add fallback ladders for failures you haven't actually seen.**
+  Real failures go in; hypothetical ones stay out.
+- **Optional > mandatory** for every new helper. If a tool is only useful
+  sometimes, make it a `reference/` script invoked on demand, not a
+  MUST-run step.
+- **Three-tier placement for new learnings**:
+  - Universal principle that applies every run → SKILL.md body (rare)
+  - Common failure mode (≥3 invocations hit it) → `click-fallbacks.md`
+  - Rare / product-specific gotcha → `reference/troubleshooting.md`
+- **Cleanup stays manual.** The skill reports disk usage (P-4) and
+  provides `cleanup.py`, but never deletes without explicit user action.
+- **If a workaround worked once, document it under "Report workarounds"
+  in the final report — don't ban it, and don't silently reuse it.**
