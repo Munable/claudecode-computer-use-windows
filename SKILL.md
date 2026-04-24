@@ -1,6 +1,6 @@
 ---
 name: computer-use-windows
-description: Verify any Windows desktop application UI through the "screenshot → Read → decide → act → screenshot" loop against the real running window. Generic — works for pywebview, Electron, native Win32/WPF, and browsers alike. Use when Claude is about to claim a UI/frontend/desktop-window fix is done, OR when the user asks to "verify / check / test" something in a real application window, OR any time Claude is tempted to substitute Playwright / localhost browser / code-reading for real desktop interaction. Windows-only (uses pywin32, SetProcessDpiAwareness, pyautogui). Each invocation self-senses the environment — there is nothing baked at install time. Covers preflight (7 environment checks), the 5-step verify loop, the click-fallback ladder, non-ASCII input via clipboard, and a hard-forbidden-substitution list. Mandatory before declaring any Windows desktop UI work complete.
+description: Verify any Windows desktop application UI through the "screenshot → Read → decide → act → screenshot" loop against the real running window. Generic — works for pywebview, Electron, native Win32/WPF, and browsers alike. Use when Claude is about to claim a UI/frontend/desktop-window fix is done, OR when the user asks to "verify / check / test" something in a real application window, OR any time Claude is tempted to substitute Playwright / localhost browser / code-reading for real desktop interaction. Windows-only (uses pywin32, SetProcessDpiAwareness, pyautogui). Each invocation self-senses the environment — there is nothing baked at install time. Covers preflight (8 environment checks including UIPI integrity match), the 5-step verify loop, the click-fallback ladder, non-ASCII input via clipboard, and a hard-forbidden-substitution list. Mandatory before declaring any Windows desktop UI work complete.
 ---
 
 # computer-use-windows
@@ -89,8 +89,8 @@ python reference/preflight.py --window-title "<substring>"
 python reference/preflight.py --window-title "<substring>" --health-url http://127.0.0.1:8000/health
 ```
 
-The preflight runs **seven checks** (P-1 fast-fails on non-Windows with
-exit code 2; P-2..P-7 full-scan so every remaining issue surfaces at once):
+The preflight runs **eight checks** (P-1 fast-fails on non-Windows with
+exit code 2; P-2..P-8 full-scan so every remaining issue surfaces at once):
 
 - **P-1** OS is Windows (fast-fails otherwise).
 - **P-2** `pyautogui`, `pyperclip`, `pywin32` importable.
@@ -100,6 +100,11 @@ exit code 2; P-2..P-7 full-scan so every remaining issue surfaces at once):
 - **P-5** Per-Monitor V2 DPI awareness set + resolution + scale factor captured.
 - **P-6** `%APPDATA%`, `~`, tempdir are reachable.
 - **P-7** Optional: health probe to a user-supplied URL. Skipped if not given.
+- **P-8** Target process integrity match (UIPI). WARN if the target window's
+         process runs at higher Windows integrity than this process —
+         synthetic input and PostMessage will be silently blocked in that
+         case. Fix: restart Claude Code as Administrator, or stop (the skill
+         cannot drive the app at current privilege).
 
 **Decision rules:**
 

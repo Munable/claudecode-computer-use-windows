@@ -109,7 +109,7 @@ claudecode-computer-use-windows/
 ├── LICENSE                 # MIT
 ├── .gitignore
 └── reference/
-    ├── preflight.py        # 7-check environment scan + manifest helpers
+    ├── preflight.py        # 8-check environment scan + manifest helpers
     ├── scan_windows.py     # Lists every visible top-level window
     ├── dpi.py              # Per-Monitor V2 DPI awareness helper
     ├── cleanup.py          # Manual pruning of accumulated run_dir history

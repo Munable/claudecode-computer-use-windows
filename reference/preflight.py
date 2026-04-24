@@ -359,6 +359,79 @@ def check_p6_path_whitelist() -> CheckResult:
     return r
 
 
+def check_p8_integrity(window_title: str | None) -> CheckResult:
+    """Warn if the target window's process runs at higher integrity than ours.
+
+    Windows UIPI silently drops synthetic input (pyautogui.mouse_event) and
+    rejects PostMessage when a lower-integrity process targets a higher one.
+    Detect the condition cheaply by probing PROCESS_QUERY_INFORMATION access:
+    if OpenProcess is denied, the target is at higher integrity and the skill
+    cannot drive it without matching elevation.
+    """
+    r = CheckResult(id="P-8", name="Target process integrity match (UIPI)")
+    if not window_title:
+        r.status = "PASS"
+        r.detail = "no --window-title; skipped"
+        r.data = {"skipped": True}
+        return r
+    try:
+        import ctypes
+        import pyautogui
+        import win32process
+    except ImportError:
+        r.status = "PASS"
+        r.detail = "required modules missing (see P-2); skipped"
+        return r
+
+    try:
+        candidates = pyautogui.getWindowsWithTitle(window_title) or []
+    except Exception:
+        candidates = []
+    win = _pick_main_window(list(candidates), window_title)
+    if win is None:
+        r.status = "PASS"
+        r.detail = "no matching window (P-3 did not match); skipped"
+        r.data = {"skipped": True}
+        return r
+
+    try:
+        hwnd = getattr(win, "_hWnd", None)
+        if hwnd is None:
+            raise AttributeError("pygetwindow object has no _hWnd")
+        _, target_pid = win32process.GetWindowThreadProcessId(hwnd)
+    except Exception as exc:
+        r.status = "PASS"
+        r.detail = f"could not resolve target PID: {exc}; skipped"
+        return r
+
+    # PROCESS_QUERY_INFORMATION = 0x0400. A medium-integrity caller will be
+    # denied this right on a high-integrity target (UIPI). If open succeeds,
+    # target is at same-or-lower integrity and input routing should work.
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x0400, False, int(target_pid))
+    if not h:
+        err = ctypes.GetLastError()
+        r.status = "WARN"
+        r.detail = (f"cannot query PID {target_pid} (Windows error {err}); "
+                    f"target runs at higher integrity than this process. "
+                    f"Synthetic input will be silently dropped and PostMessage "
+                    f"will fail with ACCESS_DENIED.")
+        r.fix = ("Restart Claude Code as Administrator (right-click → Run as "
+                 "administrator) to match the target's integrity. Otherwise "
+                 "this app cannot be driven by the skill; stop before wasting "
+                 "cycles on doomed clicks.")
+        r.data = {"target_pid": target_pid, "open_error": err,
+                  "title_match": win.title}
+        return r
+
+    k32.CloseHandle(h)
+    r.status = "PASS"
+    r.detail = (f"target PID {target_pid} queryable; same-or-lower integrity "
+                "(UIPI should not block input)")
+    r.data = {"target_pid": target_pid, "title_match": win.title}
+    return r
+
+
 def check_p7_health_probe(health_url: str | None) -> CheckResult:
     """Optional: probe a user-supplied health URL (e.g. the app's backend)."""
     r = CheckResult(id="P-7", name="Optional health probe (only runs when --health-url set)")
@@ -429,6 +502,8 @@ def run_all(window_title: str | None = None,
         check_p4_tempdir(),
         check_p6_path_whitelist(),
         check_p7_health_probe(health_url),
+        # P-8 after P-3 because it reuses the window match to find the PID.
+        check_p8_integrity(window_title),
     ]
 
 
